@@ -1,15 +1,20 @@
 module Api
   class PlayersController < ApplicationController
+    include Pagy::Backend
+
     before_action :authorize_request
-    before_action :admin_only, :except => [:show, :login]
+    before_action :admin_only, except: %i[show login]
     def index
+      cur_page = params[:cur_page]
       players = Player.all
-      player_show = Array.new
-      for player in players
-          hash = to_show(player)
-          player_show.push(hash)
+      player_show = []
+      players.each do |player|
+        hash = to_show(player)
+        player_show.push(hash)
       end
-      render json: {players:player_show}
+
+      @pagy, @players = pagy_array(player_show, items: 2, page: cur_page)
+      render json: { players: @players }
     end
 
     def create
@@ -62,6 +67,7 @@ module Api
       { 'id' => player.id, 'name' => player.fullname, 'point' => player.point,
         'wincount' => player.wincount, 'losecount' => player.losecount }
     end
+
     private
 
     def player_params
@@ -69,7 +75,7 @@ module Api
     end
 
     def admin_only
-      render json: {message: 'Access denied'} and return if @current_user.roleid != 1
+      render json: { message: 'Access denied' } and return if @current_user.roleid != 1
     end
   end
 end

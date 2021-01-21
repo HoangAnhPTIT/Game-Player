@@ -1,21 +1,22 @@
 module Api
   class GamesController < ApplicationController
+    include Pagy::Backend
+
     before_action :authorize_request
-    before_action :admin_only, :except => :leaderboard
+    before_action :admin_only, except: :leaderboard
     def index; end
 
     def create
       players = params[:players]
       player_id_one = players['A']
       player_id_two = players['B']
-      render json: { message: 'PLayer Invalid'} and return if player_id_one == player_id_two
+      render json: { message: 'PLayer Invalid' } and return if player_id_one == player_id_two
 
       check_player_exist(player_id_one, player_id_two);  return if performed?
 
       check_player_ingame(player_id_one, player_id_two); return if performed?
 
       create_game(player_id_one, player_id_two); return if performed?
-
     end
 
     def check_player_exist(player_id_one, player_id_two)
@@ -25,7 +26,6 @@ module Api
       render json: { message: "Player's id 1 invalid Or Not login" } and return unless player_one.present?
 
       render json: { message: "Player's id 2 invalid Or Not login" } and return unless player_two.present?
-
     end
 
     def check_player_ingame(player_id_one, player_id_two)
@@ -54,7 +54,6 @@ module Api
       render json: { Message: "Log's id Invalid" } and return unless game_model.present?
 
       update_point_score(player_id, game_model)
-
     end
 
     def reset_point
@@ -68,7 +67,6 @@ module Api
       reset_player(player_id, game_model, game_id, step, action) and return if player_id.present?
 
       reset_no_player(step, game_id, action) and return unless player_id.present?
-
     end
 
     def reset_no_player(step, game_id, action)
@@ -78,7 +76,7 @@ module Api
 
     def action_revert_no_player(step)
       tmps = Tmp.order('id DESC').limit(step).pluck(:logid, :point1, :point2)
-      for tmp in tmps
+      tmps.each do |tmp|
         log = Log.find(tmp[0])
         log.update(point1: tmp[1], point2: tmp[2])
       end
@@ -88,7 +86,7 @@ module Api
       logs = Log.where(gameid: game_id).order('id DESC').limit(step).pluck(:id, :point1, :point2, :gameid)
       last_log = logs.pop
       last_log_row = Log.find(last_log[0])
-      for log in logs
+      logs.each do |log|
         tmp = Tmp.find_by(logid: log[0])
         tmp.update(point1: log[1], point2: log[2]) if tmp.present?
         tmp = Tmp.create(logid: log[0], point1: log[1], point2: log[2], gameid: log[3]) and tmp.save unless tmp.present?
@@ -102,26 +100,26 @@ module Api
       action_reset(game_id, step, player_num, player_id) if action == 'reset'
 
       action_revert(game_id, step, player_num, player_id) if action == 'revert'
-      
+
       log_to_show = Log.find_by(gameid: game_id, status: true)
       render json: { Game: log_to_show }
     end
 
-    def action_revert(game_id, step, player_num, player_id)
+    def action_revert(_game_id, step, player_num, _player_id)
       tmps = Tmp.order('id DESC').limit(step).pluck(:logid, :point1, :point2)
       # binding.pry
-      for tmp in tmps
+      tmps.each do |tmp|
         log = Log.find(tmp[0])
         update_point_object(log, player_num, tmp[1], tmp[2])
       end
     end
 
-    def action_reset(game_id, step, player_num, player_id)
+    def action_reset(game_id, step, player_num, _player_id)
       logs = Log.where(gameid: game_id).order('id DESC').limit(step).pluck(:id, :point1, :point2, :gameid)
       last_log = logs.pop
       last_log_row = Log.find(last_log[0])
       # update_point_player(player_id, player_num, last_log)
-      for log in logs
+      logs.each do |log|
         tmp = Tmp.find_by(logid: log[0])
         update_point_object(tmp, player_num, log[1], log[2]) if tmp.present?
         tmp = Tmp.create(logid: log[0], point1: log[1], point2: log[2], gameid: log[3]) and tmp.save unless tmp.present?
@@ -172,19 +170,26 @@ module Api
     end
 
     def leaderboard
+      cur_page = params[:cur_page]
       sql = 'SELECT * FROM players order by (wincount - losecount ) DESC'
       players = ActiveRecord::Base.connection.exec_query(sql).rows
       # binding.pry
       player_show = []
       players.each do |player|
-        player_hash = {}
-        player_hash.store('id', player[0])
-        player_hash.store('name', player[1])
-        player_hash.store('winscount', player[5])
-        player_hash.store('losescount', player[6])
-        player_show.push(player_hash)
+        player_show.push(create_player_hash(player))
       end
-      render json: { players: player_show }
+
+      @pagy, @players = pagy_array(player_show, items: 2, page: cur_page)
+      render json: { players: @players }
+    end
+
+    def create_player_hash(player)
+      player_hash = {}
+      player_hash.store('id', player[0])
+      player_hash.store('name', player[1])
+      player_hash.store('winscount', player[5])
+      player_hash.store('losescount', player[6])
+      player_hash
     end
 
     private
@@ -193,14 +198,27 @@ module Api
       player = Player.find(player_id)
       player.update(point: player.point + 10)
       last_log = Log.find_by(status: true, gameid: game_model.id)
-      log = Log.create(point1: last_log.point1 + 10, point2: last_log.point2, gameid: game_model.id, status: true) if player_id == game_model.player1
-      log = Log.create(point1: last_log.point1, point2: last_log.point2 + 10, gameid: game_model.id, status: true) if player_id == game_model.player2
-      render json: { Message: "Player's id Invalid" } and return unless log.present?
+
+      log = create_update_log(player_id, game_model, last_log); return if performed?
 
       log.save
       last_log.update(status: false)
       game_res = to_show_log(game_model.player1, game_model.player2, log.id, 0)
       render json: { game: game_res }
+    end
+
+    def create_update_log(player_id, game_model, last_log)
+      if player_id == game_model.player1
+        log = Log.create(point1: last_log.point1 + 10, point2: last_log.point2, gameid: game_model.id,
+                         status: true)
+      end
+      if player_id == game_model.player2
+        log = Log.create(point1: last_log.point1, point2: last_log.point2 + 10, gameid: game_model.id,
+                         status: true)
+      end
+      render json: { Message: "Player's id Invalid" } and return unless log.present?
+
+      log
     end
 
     def destroy_update(player)
@@ -255,7 +273,7 @@ module Api
     end
 
     def admin_only
-      render json: {message: "Access denied"} and return if @current_user.roleid != 1
+      render json: { message: 'Access denied' } and return if @current_user.roleid != 1
     end
   end
 end

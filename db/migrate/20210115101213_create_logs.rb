@@ -9,7 +9,7 @@ class CreateLogs < ActiveRecord::Migration[6.1]
     end
     add_column :logs, :gameid, :bigint
     add_column :logs, :status, :boolean
-    add_foreign_key :logs, :games, column: :gameid, primary_key: "id"
+    add_foreign_key :logs, :games, column: :gameid, primary_key: 'id'
   end
 
   def down

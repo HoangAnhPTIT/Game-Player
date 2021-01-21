@@ -71,21 +71,36 @@ module Api
 
     def reset_no_player(step, game_id, action)
       action_reset_no_player(step, game_id) and return if action == 'reset'
-      action_revert_no_player(step) and return if action == 'revert'
+      action_revert_no_player(step, game_id) and return if action == 'revert'
     end
 
-    def action_revert_no_player(step)
-      tmps = Tmp.order('id DESC').limit(step).pluck(:logid, :point1, :point2)
+    def action_revert_no_player(step, game_id)
+      last_log_row = Log.find_by(gameid: game_id, status: true)
+      render json: { message: 'step revert != step reset' } and return unless last_log_row.undo == step
+
+      revert_tmp_no_player(step, game_id) if last_log_row.undo == step
+    end
+
+    def revert_tmp_no_player(step, game_id)
+      tmps = Tmp.order('logid DESC').where(gameid: game_id).limit(step).pluck(:logid, :point1, :point2)
+      tmp_last = tmps.last
+      tmp_first = tmps.first
+      update_point_no_player_revert(game_id, tmp_last, tmp_first)
       tmps.each do |tmp|
         log = Log.find(tmp[0])
         log.update(point1: tmp[1], point2: tmp[2])
       end
+      render json: { message: 'Revert done !!!' }
     end
 
     def action_reset_no_player(step, game_id)
       logs = Log.where(gameid: game_id).order('id DESC').limit(step).pluck(:id, :point1, :point2, :gameid)
       last_log = logs.pop
       last_log_row = Log.find(last_log[0])
+      first_log = logs.first
+      log_status_true = Log.find_by(gameid: game_id, status: true)
+      log_status_true.update(undo: step)
+      update_point_no_player_reset(game_id, last_log, first_log)
       logs.each do |log|
         tmp = Tmp.find_by(logid: log[0])
         tmp.update(point1: log[1], point2: log[2]) if tmp.present?
@@ -93,6 +108,27 @@ module Api
         log_db = Log.find(log[0])
         log_db.update(point1: last_log_row.point1, point2: last_log_row.point2)
       end
+      render json: { message: 'Reset done !!!' }
+    end
+
+    def update_point_no_player_reset(game_id, log, first_log)
+      game = Game.find(game_id)
+      player_one = Player.find(game.player1)
+      player_two = Player.find(game.player2)
+      point_change_one = player_one.point + log[1] - first_log[1]
+      point_change_two = player_two.point + log[2] - first_log[2]
+      player_one.update(point: point_change_one)
+      player_two.update(point: point_change_two)
+    end
+
+    def update_point_no_player_revert(game_id, tmp_last, tmp_first)
+      game = Game.find(game_id)
+      player_one = Player.find(game.player1)
+      player_two = Player.find(game.player2)
+      point_change_one = player_one.point - tmp_last[1] + tmp_first[1]
+      point_change_two = player_two.point - tmp_last[2] + tmp_first[2]
+      player_one.update(point: point_change_one)
+      player_two.update(point: point_change_two)
     end
 
     def reset_player(player_id, game_model, game_id, step, action)
@@ -101,24 +137,37 @@ module Api
 
       action_revert(game_id, step, player_num, player_id) if action == 'revert'
 
-      log_to_show = Log.find_by(gameid: game_id, status: true)
-      render json: { Game: log_to_show }
+      # log_to_show = Log.find_by(gameid: game_id, status: true)
+      # render json: { Game: log_to_show }
     end
 
-    def action_revert(_game_id, step, player_num, _player_id)
-      tmps = Tmp.order('id DESC').limit(step).pluck(:logid, :point1, :point2)
-      # binding.pry
+    def action_revert(game_id, step, player_num, player_id)
+      last_log_row = Log.find_by(gameid: game_id, status: true)
+      render json: { message: 'step revert != step reset' } and return unless last_log_row.undo == step
+
+      revert_tmps(player_id, game_id, step, player_num) if last_log_row.undo == step
+    end
+
+    def revert_tmps(player_id, game_id, step, player_num)
+      tmps = Tmp.order('logid DESC').where(gameid: game_id).limit(step).pluck(:logid, :point1, :point2)
+      tmp_last = tmps.last
+      tmp_first = tmps.first
+      update_point_player_revert(player_id, player_num, tmp_last, tmp_first)
       tmps.each do |tmp|
         log = Log.find(tmp[0])
         update_point_object(log, player_num, tmp[1], tmp[2])
       end
+      render json: { message: 'Revert done !!!' }
     end
 
-    def action_reset(game_id, step, player_num, _player_id)
+    def action_reset(game_id, step, player_num, player_id)
       logs = Log.where(gameid: game_id).order('id DESC').limit(step).pluck(:id, :point1, :point2, :gameid)
       last_log = logs.pop
+      first_log = logs.first
       last_log_row = Log.find(last_log[0])
-      # update_point_player(player_id, player_num, last_log)
+      log_status_true = Log.find_by(gameid: game_id, status: true)
+      log_status_true.update(undo: step)
+      update_point_player_reset(player_id, player_num, last_log, first_log)
       logs.each do |log|
         tmp = Tmp.find_by(logid: log[0])
         update_point_object(tmp, player_num, log[1], log[2]) if tmp.present?
@@ -126,12 +175,19 @@ module Api
         single_log = Log.find(log[0])
         update_point_object(single_log, player_num, last_log_row.point1, last_log_row.point2)
       end
+      render json: { message: 'Reset done !!!' }
     end
 
-    def update_point_player(player_id, player_num, log)
-      player_rs = player.find(player_id)
-      player_rs.update(point: player_rs.point - log[1]) if player_num == 1
-      player_rs.update(point: player_rs.point - log[2]) if player_num == 2
+    def update_point_player_reset(player_id, player_num, log, first_log)
+      player_rs = Player.find(player_id)
+      player_rs.update(point: player_rs.point + log[1] - first_log[1]) if player_num == 1
+      player_rs.update(point: player_rs.point + log[2] - first_log[2]) if player_num == 2
+    end
+
+    def update_point_player_revert(player_id, player_num, tmp_last, tmp_first)
+      player_rs = Player.find(player_id)
+      player_rs.update(point: player_rs.point - tmp_last[1] + tmp_first[1]) if player_num == 1
+      player_rs.update(point: player_rs.point - tmp_last[2] + tmp_first[2]) if player_num == 2
     end
 
     def update_point_object(object, player_num, point1, point2)
@@ -152,11 +208,17 @@ module Api
       game_model = Game.find_by(id: game_id, status: true)
       render json: { message: "Game's id invalid Or Game was end" } and return unless game_model.present?
 
+      tmps = Tmp.where(gameid: game_id)
+      tmps.each&:destroy
+
+      # tmps.each do |tmp|
+      #   tmp.destroy
+      # end
       log_model = Log.find_by(gameid: game_id, status: true)
       update_count(game_model.player1, game_model.player2, game_model) if log_model.point1 > log_model.point2
       update_count(game_model.player2, game_model.player1, game_model) if log_model.point1 < log_model.point2
       game_model.update(status: false, winner: 0) if log_model.point1 == log_model.point2
-      log_model.update(status: false)
+      log_model.update(status: false, undo: 0)
       render json: { message: 'End Game !!!' }
     end
 
@@ -277,3 +339,4 @@ module Api
     end
   end
 end
+
